@@ -1,0 +1,64 @@
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: loony_s3
+      POSTGRES_USER: loony
+      POSTGRES_PASSWORD: loony
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loony -d loony_s3"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── App (scale with: docker compose up --scale app=3) ──────────────────────
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      NODE_ENV: production
+
+      # Metadata backend
+      DB_BACKEND: postgres
+      DATABASE_URL: postgresql://loony:loony@postgres:5432/loony_s3
+
+      # Storage backend — "local" writes to the shared objdata volume.
+      # Switch to "nfs" + NFS_MOUNT_PATH when a real NFS mount is available.
+      STORAGE_BACKEND: local
+      STORAGE_ROOT: /data/objects
+
+      # Secrets — override these in production via a .env file or secret manager
+      JWT_SECRET: change-me-in-production
+      PRESIGNED_SECRET: change-me-in-production
+    volumes:
+      - objdata:/data/objects
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # No ports exposed here — nginx is the only public entry point.
+
+  # ── nginx reverse proxy + load balancer ────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - app
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  pgdata:
+  objdata:
