@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Start loony-s3-rs in development mode (SQLite, port 8006).
+# Start loony-s3-js in development mode (SQLite, port 8006).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$SCRIPT_DIR/.."
-DATA_DIR="/tmp/loony-s3-rs-dev"
+DATA_DIR="/tmp/loony-s3-js-dev"
 
-mkdir -p "$DATA_DIR"
+mkdir -p "$DATA_DIR/objects"
 
-# Build if no binary
-if [ ! -f "$ROOT/target/debug/loony-s3" ]; then
+# Build if dist is missing
+if [ ! -f "$ROOT/dist/server.js" ]; then
   echo "Building…"
-  cargo build --manifest-path "$ROOT/Cargo.toml"
+  npm --prefix "$ROOT" run build
 fi
 
-echo "Starting loony-s3-rs on port 8006 (SQLite, data dir: $DATA_DIR)"
+echo "Starting loony-s3-js on port 8006 (SQLite, data dir: $DATA_DIR)"
 exec env \
   PORT=8006 \
   BASE_URL=http://localhost:8006 \
@@ -24,5 +24,6 @@ exec env \
   DB_PATH="$DATA_DIR/metadata.db" \
   JWT_SECRET=dev-secret \
   PRESIGNED_SECRET=dev-presigned \
-  RUST_LOG=info \
-  "$ROOT/target/debug/loony-s3"
+  MIN_PART_SIZE_BYTES=0 \
+  NODE_OPTIONS='--experimental-sqlite' \
+  node "$ROOT/dist/server.js"

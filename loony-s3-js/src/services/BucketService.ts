@@ -15,7 +15,7 @@ export class BucketService {
     return this.bucketRepo.listByOwner(ownerId);
   }
 
-  async getBucket(name: string, requesterId: string): Promise<Bucket> {
+  async getBucket(name: string, requesterId: string | undefined): Promise<Bucket> {
     const bucket = await this.bucketRepo.findByName(name);
     if (!bucket) throw new AppError('BUCKET_NOT_FOUND', `Bucket '${name}' not found`);
     this.assertReadAccess(bucket, requesterId);
@@ -71,7 +71,7 @@ export class BucketService {
 
   // ─── Access helpers (synchronous — no I/O needed) ─────────────────────────
 
-  assertReadAccess(bucket: Bucket, requesterId: string): void {
+  assertReadAccess(bucket: Bucket, requesterId: string | undefined): void {
     if (bucket.acl === 'private' && bucket.ownerId !== requesterId) {
       throw new AppError('ACCESS_DENIED', `Access denied to bucket '${bucket.name}'`);
     }

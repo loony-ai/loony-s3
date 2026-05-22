@@ -33,7 +33,7 @@ interface GetObjectOptions {
   key: string;
   versionId?: string;
   range?: { start: number; end?: number };
-  requesterId: string;
+  requesterId: string | undefined;
 }
 
 export class ObjectService {
@@ -116,9 +116,16 @@ export class ObjectService {
     return { object: obj, stream };
   }
 
-  async headObject(bucketName: string, key: string, requesterId: string): Promise<StoredObject> {
+  async headObject(bucketName: string, key: string, requesterId: string | undefined): Promise<StoredObject> {
     const { object } = await this.getObject({ bucketName, key, requesterId });
     return object;
+  }
+
+  async listVersions(bucketName: string, key: string, requesterId: string | undefined): Promise<StoredObject[]> {
+    const bucket = await this.bucketRepo.findByName(bucketName);
+    if (!bucket) throw new AppError('BUCKET_NOT_FOUND', `Bucket '${bucketName}' not found`);
+    this.bucketService.assertReadAccess(bucket, requesterId);
+    return this.objectRepo.findVersions(bucket.id, key);
   }
 
   async listObjects(

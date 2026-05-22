@@ -10,20 +10,9 @@ import { AppError } from '../../utils/AppError';
 import { ObjectACL, PresignedOperation, StoredObject } from '../../types';
 import { logger } from '../../utils/logger';
 
-const PresignedUrlSchema = z.object({
-  key: z.string().min(1).max(1024),
-  operation: z.enum(['GET', 'PUT', 'DELETE']),
-  expiresInSeconds: z.number().int().min(1).max(604800),
-  metadata: z.record(z.string()).optional(),
-});
-
 const CompleteMultipartSchema = z.object({
-  parts: z.array(
-    z.object({
-      partNumber: z.number().int().min(1).max(10000),
-      etag: z.string(),
-    }),
-  ).min(1),
+  parts: z.array(z.number().int().min(1).max(10000)).min(1),
+  content_type: z.string().optional(),
 });
 
 export class ObjectController {
@@ -86,21 +75,97 @@ export class ObjectController {
 
     res.setHeader('ETag', `"${obj.etag}"`);
     res.setHeader('x-version-id', obj.versionId);
-    res.status(200).json({ object: this.formatObject(obj) });
+    res.status(200).json(this.formatObject(obj));
   };
 
   /**
    * GET /{bucket}/{key}
-   * Streaming download, supports HTTP Range requests.
+   * Dispatches on query params:
+   *   ?list=true                            → list objects
+   *   ?list_versions=true                   → list versions of a key
+   *   ?presign=true&operation=GET&expires_in=N → generate presigned URL
+   *   ?uploadId=X                           → list multipart parts
+   *   ?signature=X&expires=Y&operation=Z   → consume presigned URL (no auth)
+   *   (default)                             → stream object body
    */
   getObject = async (req: Request, res: Response): Promise<void> => {
-    const requesterId = this.resolveRequesterId(req);
     const { bucket: bucketName, key } = req.params as { bucket: string; key: string };
-    const versionId = req.query['versionId'] as string | undefined;
+    const requesterId = req.user?.id;
+
+    // ── Presigned URL consumption (no auth required) ─────────────────────────
+    const sig = req.query['signature'] as string | undefined;
+    const exp = req.query['expires'] as string | undefined;
+    const op  = req.query['operation'] as string | undefined;
+    if (sig && exp && op) {
+      this.presignedService.validate(bucketName, key, op, exp, sig);
+      const bucket = await this.bucketRepo.findByName(bucketName);
+      if (!bucket) throw new AppError('BUCKET_NOT_FOUND', `Bucket '${bucketName}' not found`);
+      return this.streamObject(req, res, bucketName, key, bucket.ownerId);
+    }
+
+    // ── List objects ─────────────────────────────────────────────────────────
+    if (req.query['list'] === 'true') {
+      if (!requesterId) throw new AppError('UNAUTHORIZED', 'Authentication required');
+      const result = await this.objectService.listObjects(
+        bucketName,
+        {
+          prefix: req.query['prefix'] as string | undefined,
+          delimiter: req.query['delimiter'] as string | undefined,
+          maxKeys: req.query['maxKeys'] ? parseInt(req.query['maxKeys'] as string, 10) : undefined,
+          continuationToken: req.query['continuationToken'] as string | undefined,
+        },
+        requesterId,
+      );
+      res.json({ ...result, objects: result.objects.map(this.formatObject) });
+      return;
+    }
+
+    // ── List versions ────────────────────────────────────────────────────────
+    if (req.query['list_versions'] === 'true') {
+      if (!requesterId) throw new AppError('UNAUTHORIZED', 'Authentication required');
+      const versions = await this.objectService.listVersions(bucketName, key, requesterId);
+      res.json({ versions: versions.map(this.formatObject) });
+      return;
+    }
+
+    // ── Generate presigned URL ───────────────────────────────────────────────
+    if (req.query['presign'] === 'true') {
+      if (!requesterId) throw new AppError('UNAUTHORIZED', 'Authentication required');
+      const operation = (req.query['operation'] as PresignedOperation | undefined) ?? 'GET';
+      const expiresIn = req.query['expires_in']
+        ? parseInt(req.query['expires_in'] as string, 10)
+        : 3600;
+      const result = await this.presignedService.generate(
+        bucketName, key, operation, expiresIn, requesterId,
+      );
+      res.json(result);
+      return;
+    }
+
+    // ── List multipart parts ─────────────────────────────────────────────────
+    if (req.query['uploadId']) {
+      if (!requesterId) throw new AppError('UNAUTHORIZED', 'Authentication required');
+      const uploadId = req.query['uploadId'] as string;
+      const { upload, parts } = await this.multipartService.listPartsWithUpload(uploadId, requesterId);
+      res.json({ uploadId: upload.uploadId, key: upload.key, parts });
+      return;
+    }
+
+    // ── Default: stream object ───────────────────────────────────────────────
+    return this.streamObject(req, res, bucketName, key, requesterId);
+  };
+
+  private streamObject = async (
+    req: Request,
+    res: Response,
+    bucketName: string,
+    key: string,
+    requesterId: string | undefined,
+  ): Promise<void> => {
+    const versionId = req.query['version_id'] as string | undefined;
 
     const rangeHeader = req.headers['range'];
     let range: { start: number; end?: number } | undefined;
-
     if (rangeHeader) {
       range = this.parseRangeHeader(rangeHeader);
     }
@@ -113,7 +178,6 @@ export class ObjectController {
       requesterId,
     });
 
-    // Resolve open-ended range (e.g. "bytes=0-") to actual last byte
     const effectiveEnd = range ? (range.end ?? object.size - 1) : undefined;
 
     res.setHeader('Content-Type', object.mimeType);
@@ -123,9 +187,8 @@ export class ObjectController {
     res.setHeader('Last-Modified', object.updatedAt.toUTCString());
     res.setHeader('x-version-id', object.versionId);
 
-    // Expose custom metadata as x-meta-* headers.
     for (const [k, v] of Object.entries(object.metadata)) {
-      res.setHeader(`x-meta-${k}`, v);
+      res.setHeader(`x-amz-meta-${k}`, v);
     }
 
     if (range) {
@@ -136,12 +199,9 @@ export class ObjectController {
     }
 
     stream.pipe(res);
-
     stream.on('error', (err) => {
       logger.error('Stream error during download', { err, key, bucketName });
-      if (!res.headersSent) {
-        res.status(500).end();
-      }
+      if (!res.headersSent) res.status(500).end();
     });
   };
 
@@ -150,7 +210,7 @@ export class ObjectController {
    * Returns metadata only (no body).
    */
   headObject = async (req: Request, res: Response): Promise<void> => {
-    const requesterId = this.resolveRequesterId(req);
+    const requesterId = req.user?.id;
     const { bucket: bucketName, key } = req.params as { bucket: string; key: string };
 
     const obj = await this.objectService.headObject(bucketName, key, requesterId);
@@ -169,30 +229,6 @@ export class ObjectController {
     res.status(200).end();
   };
 
-  /**
-   * GET /{bucket}?list=true
-   * List objects with optional prefix/delimiter/pagination.
-   */
-  listObjects = async (req: Request, res: Response): Promise<void> => {
-    const requesterId = this.resolveRequesterId(req);
-    const { bucket: bucketName } = req.params as { bucket: string };
-
-    const result = await this.objectService.listObjects(
-      bucketName,
-      {
-        prefix: req.query['prefix'] as string | undefined,
-        delimiter: req.query['delimiter'] as string | undefined,
-        maxKeys: req.query['maxKeys'] ? parseInt(req.query['maxKeys'] as string, 10) : undefined,
-        continuationToken: req.query['continuationToken'] as string | undefined,
-      },
-      requesterId,
-    );
-
-    res.json({
-      ...result,
-      objects: result.objects.map(this.formatObject),
-    });
-  };
 
   /**
    * DELETE /{bucket}/{key}
@@ -224,7 +260,7 @@ export class ObjectController {
       metadata,
     );
 
-    res.status(200).json({ uploadId: upload.uploadId, key, bucket: bucketName });
+    res.status(200).json({ uploadId: upload.uploadId, key, bucketName });
   };
 
   /**
@@ -257,19 +293,21 @@ export class ObjectController {
   /**
    * POST /{bucket}/{key}?uploadId=X
    * Complete a multipart upload.
+   * Body: { parts: [1, 2, 3], content_type?: "..." }
    */
   completeMultipartUpload = async (req: Request, res: Response): Promise<void> => {
     const requesterId = this.resolveRequesterId(req);
-    const { bucket: bucketName, key } = req.params as { bucket: string; key: string };
     const uploadId = req.query['uploadId'] as string;
     const acl = (req.headers['x-acl'] ?? 'private') as ObjectACL;
 
     if (!uploadId) throw new AppError('UPLOAD_NOT_FOUND', 'uploadId query param is required');
 
     const body = CompleteMultipartSchema.parse(req.body);
-    const obj = await this.multipartService.completeUpload(uploadId, body, requesterId, acl);
+    const obj = await this.multipartService.completeUpload(
+      uploadId, body.parts, requesterId, acl, body.content_type,
+    );
 
-    res.status(200).json({ object: this.formatObject(obj) });
+    res.status(200).json(this.formatObject(obj));
   };
 
   /**
@@ -286,66 +324,15 @@ export class ObjectController {
   };
 
   /**
-   * GET /{bucket}/{key}?uploadId=X&parts=true
+   * GET /{bucket}/{key}?uploadId=X
    */
   listParts = async (req: Request, res: Response): Promise<void> => {
     const requesterId = this.resolveRequesterId(req);
     const uploadId = req.query['uploadId'] as string;
     if (!uploadId) throw new AppError('UPLOAD_NOT_FOUND', 'uploadId is required');
 
-    const parts = await this.multipartService.listParts(uploadId, requesterId);
-    res.json({ parts });
-  };
-
-  // ─── Pre-signed URLs ──────────────────────────────────────────────────────
-
-  /**
-   * POST /{bucket}/presign
-   * Generate a pre-signed URL for secure temporary access.
-   */
-  generatePresignedUrl = async (req: Request, res: Response): Promise<void> => {
-    const requesterId = this.resolveRequesterId(req);
-    const { bucket: bucketName } = req.params as { bucket: string };
-
-    const body = PresignedUrlSchema.parse(req.body);
-    const result = await this.presignedService.generate(
-      { ...body, bucketName },
-      requesterId,
-    );
-
-    res.status(200).json(result);
-  };
-
-  /**
-   * ANY /presigned/{bucket}/{key}
-   * Validate and proxy a presigned request through to the actual operation.
-   */
-  handlePresignedRequest = async (req: Request, res: Response): Promise<void> => {
-    const { bucket: bucketName, key } = req.params as { bucket: string; key: string };
-    const operation = req.query['X-Operation'] as PresignedOperation;
-    const expires = req.query['X-Expires'] as string;
-    const signature = req.query['X-Signature'] as string;
-
-    if (!operation || !expires || !signature) {
-      throw new AppError('PRESIGNED_URL_INVALID', 'Missing required presigned URL parameters');
-    }
-
-    this.presignedService.validate(bucketName, key, operation, expires, signature);
-
-    // Presigned URLs are generated by the bucket owner, so we impersonate
-    // the owner so that downstream ACL checks pass transparently.
-    const bucket = await this.bucketRepo.findByName(bucketName);
-    if (!bucket) throw new AppError('BUCKET_NOT_FOUND', `Bucket '${bucketName}' not found`);
-    req.user = { id: bucket.ownerId, email: 'presigned@internal' };
-
-    // Route to the appropriate handler based on the authorized operation.
-    if (operation === 'GET') {
-      await this.getObject(req, res);
-    } else if (operation === 'PUT') {
-      await this.putObject(req, res);
-    } else if (operation === 'DELETE') {
-      await this.deleteObject(req, res);
-    }
+    const { upload, parts } = await this.multipartService.listPartsWithUpload(uploadId, requesterId);
+    res.json({ uploadId: upload.uploadId, key: upload.key, parts });
   };
 
   // ─── Private helpers ──────────────────────────────────────────────────────
@@ -358,8 +345,8 @@ export class ObjectController {
   private extractCustomMetadata(req: Request): Record<string, string> {
     const meta: Record<string, string> = {};
     for (const [header, value] of Object.entries(req.headers)) {
-      if (header.startsWith('x-meta-') && typeof value === 'string') {
-        meta[header.slice('x-meta-'.length)] = value;
+      if (header.startsWith('x-amz-meta-') && typeof value === 'string') {
+        meta[header.slice('x-amz-meta-'.length)] = value;
       }
     }
     return meta;
@@ -416,15 +403,15 @@ export class ObjectController {
     return {
       key: obj.key,
       size: obj.size,
-      mimeType: obj.mimeType,
+      mime_type: obj.mimeType,
       etag: obj.etag,
-      versionId: obj.versionId,
-      isLatest: obj.isLatest,
+      version_id: obj.versionId,
+      is_latest: obj.isLatest,
       acl: obj.acl,
       metadata: obj.metadata,
-      createdAt: obj.createdAt,
-      updatedAt: obj.updatedAt,
-      expiresAt: obj.expiresAt,
+      created_at: obj.createdAt,
+      updated_at: obj.updatedAt,
+      expires_at: obj.expiresAt ?? null,
     };
   }
 }

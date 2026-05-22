@@ -34,8 +34,9 @@ BODY=$(api "$BASE_URL/$BUCKET/hello.txt")
 assert_contains "get object — body" "$BODY" "Hello loony-s3-rs!"
 
 # ── HEAD ─────────────────────────────────────────────────────────────────────
-STATUS=$(http_status "$BASE_URL/$BUCKET/hello.txt" \
-  -X HEAD -H "Authorization: Bearer $TOKEN")
+STATUS=$(curl -s -I -o /dev/null -w "%{http_code}" \
+  "$BASE_URL/$BUCKET/hello.txt" \
+  -H "Authorization: Bearer $TOKEN")
 assert_status "head object — 200" "$STATUS" "200"
 
 # ── Content-Type passthrough ──────────────────────────────────────────────────

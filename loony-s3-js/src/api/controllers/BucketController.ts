@@ -27,8 +27,7 @@ export class BucketController {
   };
 
   getBucket = async (req: Request, res: Response): Promise<void> => {
-    const user = this.assertAuth(req);
-    const bucket = await this.bucketService.getBucket(req.params['name']!, user.id);
+    const bucket = await this.bucketService.getBucket(req.params['name']!, req.user?.id);
     res.json({ bucket });
   };
 

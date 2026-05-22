@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { PresignedUrl, PresignedOperation, GeneratePresignedUrlRequest } from '../types';
+import { PresignedOperation } from '../types';
 import { IBucketRepository } from '../repositories/interfaces';
 import { AppError } from '../utils/AppError';
 import { config } from '../config';
@@ -7,57 +7,48 @@ import { config } from '../config';
 /**
  * Pre-signed URL structure:
  *
- *   GET /presigned/{bucket}/{key}
- *     ?X-Expires={unix-timestamp}
- *     &X-Operation={GET|PUT|DELETE}
- *     &X-Signature={hmac-sha256}
+ *   /{bucket}/{key}?operation={GET|PUT|DELETE}&expires={unix-ts}&signature={hmac-sha256}
  *
- * Signature = HMAC-SHA256(secret, "{operation}\n{bucket}\n{key}\n{expires}")
- *
- * This is intentionally simple.  A production system would use a canonical
- * request approach similar to AWS Signature V4.
+ * Signature = HMAC-SHA256(secret, "{operation}:{bucket}:{key}:{expires}")
  */
 export class PresignedUrlService {
   constructor(private readonly bucketRepo: IBucketRepository) {}
 
-  async generate(req: GeneratePresignedUrlRequest, requesterId: string): Promise<PresignedUrl> {
-    if (req.expiresInSeconds > config.presigned.maxExpirySeconds) {
+  async generate(
+    bucketName: string,
+    key: string,
+    operation: PresignedOperation,
+    expiresInSeconds: number,
+    requesterId: string,
+  ): Promise<{ url: string; expiresAt: number }> {
+    if (expiresInSeconds > config.presigned.maxExpirySeconds) {
       throw new AppError(
         'PRESIGNED_URL_INVALID',
         `Expiry exceeds maximum of ${config.presigned.maxExpirySeconds} seconds`,
       );
     }
 
-    const bucket = await this.bucketRepo.findByName(req.bucketName);
-    if (!bucket) throw new AppError('BUCKET_NOT_FOUND', `Bucket '${req.bucketName}' not found`);
+    const bucket = await this.bucketRepo.findByName(bucketName);
+    if (!bucket) throw new AppError('BUCKET_NOT_FOUND', `Bucket '${bucketName}' not found`);
     if (bucket.ownerId !== requesterId) {
       throw new AppError('ACCESS_DENIED', 'Only bucket owners can generate pre-signed URLs');
     }
 
-    const expiresAt = new Date(Date.now() + req.expiresInSeconds * 1000);
-    const expiresTs = Math.floor(expiresAt.getTime() / 1000);
+    const expiresAt = Math.floor(Date.now() / 1000) + expiresInSeconds;
+    const signature = this.sign(operation, bucketName, key, expiresAt);
 
-    const signature = this.sign(req.operation, req.bucketName, req.key, expiresTs);
+    const url = new URL(`/${encodeURIComponent(bucketName)}/${encodeURIComponent(key)}`, config.baseUrl);
+    url.searchParams.set('operation', operation);
+    url.searchParams.set('expires', String(expiresAt));
+    url.searchParams.set('signature', signature);
 
-    const url = new URL(
-      `/presigned/${encodeURIComponent(req.bucketName)}/${encodeURIComponent(req.key)}`,
-      config.baseUrl,
-    );
-    url.searchParams.set('X-Expires', String(expiresTs));
-    url.searchParams.set('X-Operation', req.operation);
-    url.searchParams.set('X-Signature', signature);
-
-    return { url: url.toString(), expiresAt, operation: req.operation };
+    return { url: url.toString(), expiresAt };
   }
 
-  /**
-   * Validate an incoming presigned request.
-   * Throws AppError if invalid or expired.
-   */
   validate(
     bucketName: string,
     key: string,
-    operation: PresignedOperation,
+    operation: string,
     expiresParam: string,
     signatureParam: string,
   ): void {
@@ -71,9 +62,8 @@ export class PresignedUrlService {
       throw new AppError('PRESIGNED_URL_EXPIRED', 'Pre-signed URL has expired');
     }
 
-    const expected = this.sign(operation, bucketName, key, expiresTs);
+    const expected = this.sign(operation as PresignedOperation, bucketName, key, expiresTs);
 
-    // Constant-time comparison to prevent timing attacks.
     const expectedBuf = Buffer.from(expected, 'hex');
     const providedBuf = Buffer.from(signatureParam, 'hex');
 
@@ -85,13 +75,8 @@ export class PresignedUrlService {
     }
   }
 
-  private sign(
-    operation: PresignedOperation,
-    bucket: string,
-    key: string,
-    expiresTs: number,
-  ): string {
-    const message = `${operation}\n${bucket}\n${key}\n${expiresTs}`;
+  private sign(operation: PresignedOperation, bucket: string, key: string, expiresTs: number): string {
+    const message = `${operation}:${bucket}:${key}:${expiresTs}`;
     return crypto
       .createHmac('sha256', config.presigned.secret)
       .update(message)

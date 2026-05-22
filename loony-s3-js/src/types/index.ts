@@ -119,13 +119,12 @@ export interface StoredObjectInfo {
 
 export interface AuthenticatedUser {
   id: string;
-  email: string;
-  apiKeyId?: string;
+  name: string;
 }
 
 export interface JwtPayload {
   sub: string;    // userId
-  email: string;
+  name: string;
   iat: number;
   exp: number;
 }

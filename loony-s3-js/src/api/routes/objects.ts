@@ -7,44 +7,19 @@ import { uploadRateLimiter, downloadRateLimiter } from '../middleware/rateLimite
 export function createObjectRouter(controller: ObjectController): Router {
   const router = Router({ mergeParams: true });
 
-  // ─── Pre-signed URL handler (no auth required — signature is the credential) ──
   /**
-   * GET|PUT|DELETE /presigned/:bucket/:key
-   */
-  router.all(
-    '/presigned/:bucket/:key(*)',
-    asyncHandler(controller.handlePresignedRequest),
-  );
-
-  // ─── All other object routes require authentication ─────────────────────────
-
-  /**
-   * GET /:bucket  (list objects)
-   * Query params: prefix, delimiter, maxKeys, continuationToken
-   */
-  router.get('/:bucket', requireAuth, asyncHandler(controller.listObjects));
-
-  /**
-   * POST /:bucket/presign
-   * Generate a presigned URL.
-   * Body: { key, operation, expiresInSeconds, metadata? }
-   */
-  router.post('/:bucket/presign', requireAuth, asyncHandler(controller.generatePresignedUrl));
-
-  /**
-   * POST /:bucket/:key?uploads
-   * Initiate multipart upload.
+   * POST /:bucket/:key?uploads              → initiate multipart
+   * POST /:bucket/:key?uploadId=X           → complete multipart
    */
   router.post(
     '/:bucket/:key(*)',
     requireAuth,
     uploadRateLimiter,
     asyncHandler(async (req, res, next) => {
-      // Route based on query params to disambiguate POST actions.
       if ('uploads' in req.query) {
         return controller.initiateMultipartUpload(req, res);
       }
-      if (req.query['uploadId'] && !('parts' in req.query)) {
+      if (req.query['uploadId']) {
         return controller.completeMultipartUpload(req, res);
       }
       next();
@@ -52,11 +27,8 @@ export function createObjectRouter(controller: ObjectController): Router {
   );
 
   /**
-   * PUT /:bucket/:key
-   * Single-part upload.
-   *
-   * PUT /:bucket/:key?partNumber=N&uploadId=X
-   * Upload a part.
+   * PUT /:bucket/:key                        → put object
+   * PUT /:bucket/:key?partNumber=N&uploadId=X → upload part
    */
   router.put(
     '/:bucket/:key(*)',
@@ -73,28 +45,23 @@ export function createObjectRouter(controller: ObjectController): Router {
   /**
    * HEAD /:bucket/:key
    */
-  router.head('/:bucket/:key(*)', requireAuth, asyncHandler(controller.headObject));
+  router.head('/:bucket/:key(*)', optionalAuth, asyncHandler(controller.headObject));
 
   /**
-   * GET /:bucket/:key?parts=true&uploadId=X  (list parts)
-   * GET /:bucket/:key                         (download object)
+   * GET /:bucket/:key  — dispatches internally on query params:
+   *   ?list=true, ?list_versions=true, ?presign=true,
+   *   ?uploadId=X, ?signature=X&expires=Y&operation=Z, (default) download
    */
   router.get(
     '/:bucket/:key(*)',
-    optionalAuth,  // public objects can be accessed without auth
+    optionalAuth,
     downloadRateLimiter,
-    asyncHandler((req, res) => {
-      if ('parts' in req.query && req.query['uploadId']) {
-        return controller.listParts(req, res);
-      }
-      return controller.getObject(req, res);
-    }),
+    asyncHandler(controller.getObject),
   );
 
   /**
-   * DELETE /:bucket/:key?versionId=X        (delete specific version)
-   * DELETE /:bucket/:key?uploadId=X         (abort multipart)
-   * DELETE /:bucket/:key                    (delete latest version)
+   * DELETE /:bucket/:key?uploadId=X → abort multipart
+   * DELETE /:bucket/:key             → delete object
    */
   router.delete(
     '/:bucket/:key(*)',

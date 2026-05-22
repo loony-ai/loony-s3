@@ -1,48 +1,22 @@
 import { Router } from 'express';
 import { BucketController } from '../controllers/BucketController';
 import { asyncHandler } from '../middleware/errorHandler';
-import { requireAuth } from '../middleware/auth';
+import { requireAuth, optionalAuth } from '../middleware/auth';
 
 export function createBucketRouter(controller: BucketController): Router {
   const router = Router();
 
-  // All bucket operations require authentication.
-  router.use(requireAuth);
+  router.get('/', requireAuth, asyncHandler(controller.listBuckets));
+  router.post('/', requireAuth, asyncHandler(controller.createBucket));
 
-  /**
-   * GET /buckets
-   * List all buckets owned by the authenticated user.
-   *
-   * Response: { buckets: Bucket[], count: number }
-   */
-  router.get('/', asyncHandler(controller.listBuckets));
+  // GET with optional auth so public-read buckets are accessible without a token.
+  router.get('/:name', optionalAuth, asyncHandler(controller.getBucket));
 
-  /**
-   * POST /buckets
-   * Create a new bucket.
-   *
-   * Body: { name, acl?, region?, versioning?, metadata? }
-   * Response: { bucket: Bucket }
-   */
-  router.post('/', asyncHandler(controller.createBucket));
+  // Accept both PATCH and PUT for compatibility.
+  router.patch('/:name', requireAuth, asyncHandler(controller.updateBucket));
+  router.put('/:name', requireAuth, asyncHandler(controller.updateBucket));
 
-  /**
-   * GET /buckets/:name
-   * Get bucket details.
-   */
-  router.get('/:name', asyncHandler(controller.getBucket));
-
-  /**
-   * PATCH /buckets/:name
-   * Update bucket settings (ACL, versioning, metadata).
-   */
-  router.patch('/:name', asyncHandler(controller.updateBucket));
-
-  /**
-   * DELETE /buckets/:name
-   * Delete a bucket. Add ?force=true to delete non-empty buckets.
-   */
-  router.delete('/:name', asyncHandler(controller.deleteBucket));
+  router.delete('/:name', requireAuth, asyncHandler(controller.deleteBucket));
 
   return router;
 }

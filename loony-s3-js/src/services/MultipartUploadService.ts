@@ -7,7 +7,6 @@ import {
   UploadPart,
   StoredObject,
   ObjectACL,
-  CompleteMultipartUploadRequest,
 } from '../types';
 import { IBucketRepository, IObjectRepository } from '../repositories/interfaces';
 import { StorageBackend } from '../storage/StorageBackend';
@@ -92,13 +91,15 @@ export class MultipartUploadService {
 
   /**
    * Phase 3 — Complete.
-   * Assembles parts in order, creates the final object, removes part files.
+   * Assembles parts in order (by part number), creates the final object.
+   * Accepts parts as an array of part numbers.
    */
   async completeUpload(
     uploadId: string,
-    req: CompleteMultipartUploadRequest,
+    partNumbers: number[],
     requesterId: string,
     acl?: ObjectACL,
+    contentType?: string,
   ): Promise<StoredObject> {
     const upload = await this.objectRepo.findMultipartUpload(uploadId);
     if (!upload) throw new AppError('UPLOAD_NOT_FOUND', `Upload '${uploadId}' not found`);
@@ -109,23 +110,13 @@ export class MultipartUploadService {
     const bucket = await this.bucketRepo.findById(upload.bucketId);
     if (!bucket) throw new AppError('BUCKET_NOT_FOUND', 'Bucket no longer exists');
 
-    // Validate requested parts against what we have stored.
     const storedMap = new Map(upload.parts.map((p) => [p.partNumber, p]));
     const orderedParts: UploadPart[] = [];
 
-    for (const reqPart of req.parts) {
-      const stored = storedMap.get(reqPart.partNumber);
+    for (const partNumber of partNumbers) {
+      const stored = storedMap.get(partNumber);
       if (!stored) {
-        throw new AppError(
-          'INVALID_PART_NUMBER',
-          `Part ${reqPart.partNumber} was not uploaded`,
-        );
-      }
-      if (stored.etag !== reqPart.etag) {
-        throw new AppError(
-          'INVALID_PART_NUMBER',
-          `ETag mismatch for part ${reqPart.partNumber}`,
-        );
+        throw new AppError('INVALID_PART_NUMBER', `Part ${partNumber} was not uploaded`);
       }
       orderedParts.push(stored);
     }
@@ -160,7 +151,7 @@ export class MultipartUploadService {
       bucketName: bucket.name,
       key: upload.key,
       size: info.size,
-      mimeType: mime.lookup(upload.key) || 'application/octet-stream',
+      mimeType: contentType ?? (mime.lookup(upload.key) || 'application/octet-stream'),
       etag: info.etag,
       storageKey: info.storageKey,
       acl: acl ?? 'private',
@@ -208,6 +199,18 @@ export class MultipartUploadService {
       throw new AppError('ACCESS_DENIED', 'Access denied');
     }
     return upload.parts;
+  }
+
+  async listPartsWithUpload(
+    uploadId: string,
+    requesterId: string,
+  ): Promise<{ upload: MultipartUpload; parts: UploadPart[] }> {
+    const upload = await this.objectRepo.findMultipartUpload(uploadId);
+    if (!upload) throw new AppError('UPLOAD_NOT_FOUND', `Upload '${uploadId}' not found`);
+    if (upload.ownerId !== requesterId) {
+      throw new AppError('ACCESS_DENIED', 'Access denied');
+    }
+    return { upload, parts: upload.parts };
   }
 
   private validatePartNumber(n: number): void {

@@ -61,31 +61,28 @@ function verifyJwt(token: string): AuthenticatedUser {
     }
     throw new AppError('UNAUTHORIZED', 'Invalid token');
   }
-  return { id: payload.sub, email: payload.email };
+  return { id: payload.sub, name: payload.name };
 }
 
-/**
- * MVP: encode userId:email as base64.  Replace with DB lookup in production.
- * Format: base64("{userId}:{email}")
- */
+/** Format: base64("{user_id}:{name}") */
 function verifyApiKey(rawKey: string): AuthenticatedUser {
   try {
     const decoded = Buffer.from(rawKey, 'base64').toString('utf-8');
     const colonIdx = decoded.indexOf(':');
     if (colonIdx === -1) throw new Error('bad format');
     const id = decoded.slice(0, colonIdx);
-    const email = decoded.slice(colonIdx + 1);
-    if (!id || !email) throw new Error('bad format');
-    return { id, email, apiKeyId: rawKey.slice(0, 8) };
+    const name = decoded.slice(colonIdx + 1);
+    if (!id || !name) throw new Error('bad format');
+    return { id, name };
   } catch {
     throw new AppError('UNAUTHORIZED', 'Invalid API key');
   }
 }
 
 /** Helper to issue a JWT — used by the /auth/token endpoint. */
-export function signJwt(user: { id: string; email: string }): string {
+export function signJwt(user: { id: string; name: string }): string {
   return jwt.sign(
-    { sub: user.id, email: user.email },
+    { sub: user.id, name: user.name },
     config.auth.jwtSecret,
     { expiresIn: config.auth.jwtExpiry } as jwt.SignOptions,
   );
