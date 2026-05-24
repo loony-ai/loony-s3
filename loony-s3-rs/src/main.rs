@@ -53,7 +53,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             DbBackendKind::Sqlite => {
                 let opts = sqlx::sqlite::SqliteConnectOptions::new()
                     .filename(&cfg.db.sqlite_path)
-                    .create_if_missing(true);
+                    .create_if_missing(true)
+                    .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+                    .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+                    .pragma("cache_size", "-131072")      // 128 MB page cache
+                    .pragma("temp_store", "memory")
+                    .pragma("mmap_size", "8589934592")    // 8 GB mmap window
+                    .pragma("busy_timeout", "5000")       // wait up to 5s on write lock
+                    .pragma("wal_autocheckpoint", "10000"); // checkpoint every 10K pages
                 let pool = sqlx::SqlitePool::connect_with(opts).await?;
                 sqlite_migrate(&pool).await?;
                 (

@@ -36,7 +36,10 @@ impl ObjectService {
         opts:        PutObjectOptions,
     ) -> Result<StoredObject> {
         let version_id  = Uuid::new_v4().to_string();
-        let storage_key = format!("{bucket_name}/{key}/{version_id}");
+        // 4-level hex sharding: 65,536 leaf dirs → ~15K files/dir at 1B objects.
+        // Strip dashes so positions 0-3 are always hex digits.
+        let hex = version_id.replace('-', "");
+        let storage_key = format!("{bucket_name}/{}/{}/{version_id}", &hex[..2], &hex[2..4]);
 
         let info = self.storage.write(&storage_key, stream, opts.size_hint).await?;
 

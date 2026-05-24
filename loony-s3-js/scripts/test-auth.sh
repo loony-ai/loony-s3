@@ -11,6 +11,10 @@ RESP=$(http_body -X POST "$BASE_URL/auth/token" \
   -H "Content-Type: application/json" \
   -d '{"user_id":"auth-test","name":"Auth Tester"}')
 
+echo $RESP
+
+# $RESP = { "token": "...", "api_key": "..." }
+
 assert_contains "issue token — returns token"   "$RESP" '"token"'
 assert_contains "issue token — returns api_key" "$RESP" '"api_key"'
 

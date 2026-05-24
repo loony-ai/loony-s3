@@ -56,8 +56,9 @@ export class ObjectService {
     }
 
     const versionId = uuidv4().replace(/-/g, '');
-    const shard = versionId.slice(0, 2);
-    const storageKey = path.posix.join(opts.bucketName, shard, versionId);
+    const shard1 = versionId.slice(0, 2);
+    const shard2 = versionId.slice(2, 4);
+    const storageKey = path.posix.join(opts.bucketName, shard1, shard2, versionId);
     const resolvedMime = opts.mimeType ?? (mime.lookup(opts.key) || 'application/octet-stream');
 
     logger.debug('Writing object to storage', { storageKey, key: opts.key });

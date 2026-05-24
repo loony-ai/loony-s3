@@ -46,6 +46,14 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_objects_bucket_key
             ON objects(bucket_id, key, is_latest);
 
+        CREATE INDEX IF NOT EXISTS idx_objects_list
+            ON objects(bucket_id, key)
+            WHERE is_latest = 1 AND deleted_at IS NULL;
+
+        CREATE INDEX IF NOT EXISTS idx_objects_expires
+            ON objects(expires_at)
+            WHERE expires_at IS NOT NULL;
+
         CREATE TABLE IF NOT EXISTS multipart_uploads (
             upload_id   TEXT PRIMARY KEY,
             bucket_id   TEXT NOT NULL REFERENCES buckets(id) ON DELETE CASCADE,

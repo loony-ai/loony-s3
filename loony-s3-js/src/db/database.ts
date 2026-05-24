@@ -26,10 +26,14 @@ export function initDb(): void {
 
   db = new DatabaseSync(config.storage.dbPath);
 
-  // WAL mode: concurrent reads + single writer, non-blocking.
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA foreign_keys = ON');
   db.exec('PRAGMA synchronous = NORMAL');
+  db.exec('PRAGMA cache_size = -131072');      // 128 MB page cache
+  db.exec('PRAGMA temp_store = memory');
+  db.exec('PRAGMA mmap_size = 8589934592');    // 8 GB mmap window
+  db.exec('PRAGMA busy_timeout = 5000');       // wait up to 5s on write lock
+  db.exec('PRAGMA wal_autocheckpoint = 10000'); // checkpoint every 10K pages
 
   runMigrations(db);
   addMissingColumns(db);
@@ -77,6 +81,14 @@ function runMigrations(db: DatabaseSync): void {
 
     CREATE INDEX IF NOT EXISTS idx_objects_bucket_prefix
       ON objects(bucket_id, key);
+
+    CREATE INDEX IF NOT EXISTS idx_objects_list
+      ON objects(bucket_id, key)
+      WHERE is_latest = 1 AND deleted_at IS NULL;
+
+    CREATE INDEX IF NOT EXISTS idx_objects_expires
+      ON objects(expires_at)
+      WHERE expires_at IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS multipart_uploads (
       upload_id    TEXT PRIMARY KEY,
