@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import cors from 'cors';
 import { config } from './config';
 import { logger } from './utils/logger';
 import { snapshot as metricsSnapshot } from './utils/metrics';
@@ -89,6 +90,7 @@ async function bootstrap(): Promise<void> {
   const app = express();
 
   app.set('trust proxy', 1);
+  app.use(cors({ origin: true, credentials: true }));
   app.use(requestId);                            // attach x-request-id first
   app.use(express.json({ limit: '1mb' }));
   app.use(requestLogger);

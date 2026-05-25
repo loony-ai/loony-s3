@@ -1,18 +1,21 @@
-import { Pool } from 'pg';
-import { config } from '../config';
-import { logger } from '../utils/logger';
+import { Pool } from "pg";
+import { config } from "../config";
+import { logger } from "../utils/logger";
 
 let pool: Pool;
 
 export function getPool(): Pool {
-  if (!pool) throw new Error('PostgreSQL pool not initialized. Call initPostgres() first.');
+  if (!pool)
+    throw new Error(
+      "PostgreSQL pool not initialized. Call initPostgres() first.",
+    );
   return pool;
 }
 
 export async function closePool(): Promise<void> {
   if (pool) {
     await pool.end();
-    logger.info('PostgreSQL pool closed');
+    logger.info("PostgreSQL pool closed");
   }
 }
 
@@ -20,10 +23,10 @@ export async function initPostgres(): Promise<void> {
   pool = new Pool({ connectionString: config.db.postgresUrl });
 
   // Smoke-test the connection.
-  await pool.query('SELECT 1');
+  await pool.query("SELECT 1");
 
   await runMigrations();
-  logger.info('PostgreSQL initialized', { url: config.db.postgresUrl });
+  logger.info("PostgreSQL initialized");
 }
 
 async function runMigrations(): Promise<void> {
