@@ -1,0 +1,43 @@
+[Unit]
+Description=loony-s3 object storage server
+Documentation=file:///opt/loony-s3/docs/deployment.md
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=loony-s3
+Group=loony-s3
+
+WorkingDirectory=/opt/loony-s3
+
+# Load all env vars from this file (copy from .env.production.example and fill in)
+EnvironmentFile=/etc/loony-s3/production.env
+
+# Required for the built-in node:sqlite module
+Environment=NODE_OPTIONS=--experimental-sqlite
+
+ExecStart=/usr/bin/node dist/server.js
+
+# Restart on crash; back off if it keeps crashing
+Restart=on-failure
+RestartSec=5s
+StartLimitBurst=5
+StartLimitIntervalSec=60s
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/data/loony-s3
+
+# Graceful shutdown: give the process 30s to drain connections
+TimeoutStopSec=30
+
+# Log to journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=loony-s3
+
+[Install]
+WantedBy=multi-user.target

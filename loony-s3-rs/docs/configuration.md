@@ -1,101 +1,108 @@
-# Configuration
+# Configuration Reference
 
-All configuration is read from environment variables at startup.  
-A `.env` file in the working directory is loaded automatically via `dotenvy`.
+All configuration is read from environment variables at startup. Copy `.env.example` to `.env` and fill in the values.
+
+---
 
 ## Server
 
 | Variable | Default | Description |
-|---|---|---|
-| `PORT` | `3000` | TCP port to listen on |
-| `BASE_URL` | `http://localhost:3000` | Public base URL (used in presigned URL generation) |
-| `NODE_ENV` | `development` | Runtime environment label |
+|----------|---------|-------------|
+| `PORT` | `3000` | TCP port the HTTP server listens on |
+| `NODE_ENV` | `development` | `development` enables coloured logs and verbose output. Set to `production` for JSON logs. |
+| `BASE_URL` | `http://localhost:3000` | Used when constructing pre-signed URL strings returned to clients. Set to your public domain in production. |
 
-## Storage backend
+---
 
-| Variable | Default | Description |
-|---|---|---|
-| `STORAGE_BACKEND` | `local` | `local` or `nfs` |
-| `STORAGE_ROOT` | `/tmp/loony-s3-rs/data` | Root directory for local storage |
-| `NFS_MOUNT_PATH` | `/mnt/nfs/loony-s3` | Root directory when `STORAGE_BACKEND=nfs` |
-
-**NFS mode** uses the same `FsStorageBackend` but calls `fsync` before the atomic rename, preventing partial-file visibility across NFS nodes.
-
-## Database backend
+## Storage (Local Filesystem)
 
 | Variable | Default | Description |
-|---|---|---|
-| `DB_BACKEND` | `sqlite` | `sqlite` or `postgres` |
-| `DB_PATH` | `/tmp/loony-s3-rs/metadata.db` | SQLite file path (created if missing) |
-| `DATABASE_URL` | `postgresql://localhost:5432/loony_s3` | PostgreSQL connection URL |
+|----------|---------|-------------|
+| `STORAGE_ROOT` | `/tmp/loony-s3/data` | Root directory for all object data. Must be on a filesystem with sufficient space. |
+| `DB_PATH` | `/tmp/loony-s3/metadata.db` | Path to the SQLite database file. |
 
-Schema migrations run automatically on startup for both backends.
+Both directories are created automatically on startup if they do not exist.
+
+**Production recommendation:** Use a dedicated mounted volume for `STORAGE_ROOT` and `DB_PATH`. Do not use `/tmp` — it is ephemeral and may be cleared on restart.
+
+---
 
 ## Authentication
 
 | Variable | Default | Description |
-|---|---|---|
-| `JWT_SECRET` | `dev-secret-change-in-production` | HMAC secret for JWT signing |
-| `JWT_EXPIRY` | `86400` | Token lifetime in seconds (default 24 h) |
+|----------|---------|-------------|
+| `JWT_SECRET` | `dev-secret-change-in-production` | HMAC-SHA256 key used to sign and verify JWTs. **Must be changed in production.** Generate with `openssl rand -hex 32`. |
+| `JWT_EXPIRY` | `24h` | Token lifetime. Accepts any value accepted by the `jsonwebtoken` library (e.g. `1h`, `7d`, `3600`). |
 
-## Presigned URLs
+---
 
-| Variable | Default | Description |
-|---|---|---|
-| `PRESIGNED_SECRET` | `dev-presigned-secret` | HMAC-SHA256 key for presigned URL signing |
-| `PRESIGNED_MAX_EXPIRY_SECONDS` | `604800` | Maximum allowed expiry (7 days) |
-
-## Upload limits
+## Pre-signed URLs
 
 | Variable | Default | Description |
-|---|---|---|
-| `MAX_OBJECT_SIZE_BYTES` | `5368709120` | 5 GiB single-object limit |
-| `MIN_PART_SIZE_BYTES` | `0` | Minimum multipart part size |
-| `MAX_PARTS` | `10000` | Maximum number of multipart parts |
+|----------|---------|-------------|
+| `PRESIGNED_SECRET` | `dev-presigned-secret` | HMAC-SHA256 key used to sign pre-signed URL payloads. Separate from `JWT_SECRET` so rotating one doesn't invalidate the other. **Must be changed in production.** |
+| `PRESIGNED_MAX_EXPIRY_SECONDS` | `604800` | Maximum lifetime a caller may request for a pre-signed URL (default 7 days). Requests for longer expiry are rejected with 400. |
 
-## Background cleanup
+---
 
-| Variable | Default | Description |
-|---|---|---|
-| `CLEANUP_EXPIRED_INTERVAL_SECS` | `300` | How often to sweep expired objects (5 min) |
-| `CLEANUP_STALE_UPLOADS_INTERVAL_SECS` | `3600` | How often to sweep stale multipart uploads (1 h) |
-| `CLEANUP_STALE_UPLOAD_MAX_AGE_SECS` | `86400` | Age threshold for stale uploads (24 h) |
-| `CLEANUP_BATCH_SIZE` | `100` | Max objects removed per cleanup pass |
-
-## Rate limiting
-
-Limits are per-server (not distributed). They use a fixed-window governor.
+## Upload Limits
 
 | Variable | Default | Description |
-|---|---|---|
-| `RATE_LIMIT_WINDOW_SECS` | `900` | Window duration (15 min) |
-| `RATE_LIMIT_AUTH_MAX` | `20` | Token requests per window |
-| `RATE_LIMIT_UPLOAD_MAX` | `200` | PUT requests per window |
-| `RATE_LIMIT_DOWNLOAD_MAX` | `600` | GET object requests per window |
-| `RATE_LIMIT_GENERAL_MAX` | `500` | All other requests per window |
+|----------|---------|-------------|
+| `MAX_OBJECT_SIZE_BYTES` | `5368709120` | Maximum size of any single object (5 GB). Enforced on single-part PUT via `Content-Length`. |
+| `MAX_PART_SIZE_BYTES` | `104857600` | Maximum size of a single multipart part (100 MB). |
+| `MIN_PART_SIZE_BYTES` | `0` | Minimum size of a multipart part. `0` disables the check. Set to `5242880` (5 MB) for strict S3 compatibility — enforced on all parts except the last. |
+| `MAX_PARTS` | `10000` | Maximum number of parts in a multipart upload (matches S3). |
 
-## Graceful shutdown
+---
 
-| Variable | Default | Description |
-|---|---|---|
-| `SHUTDOWN_DRAIN_TIMEOUT_SECS` | `10` | Seconds to wait for in-flight requests |
-| `SHUTDOWN_FORCE_EXIT_TIMEOUT_SECS` | `30` | Seconds before `process::exit(1)` |
+## Example `.env` Files
 
-## Example `.env`
+### Local Development (defaults, no changes needed)
 
 ```env
-PORT=8080
-BASE_URL=https://storage.example.com
-
-STORAGE_BACKEND=local
-STORAGE_ROOT=/var/data/loony-s3/objects
-
-DB_BACKEND=postgres
-DATABASE_URL=postgresql://loony:secret@db:5432/loony_s3
-
-JWT_SECRET=change-me-in-production-64-chars-min
-PRESIGNED_SECRET=another-strong-secret
-
-CLEANUP_EXPIRED_INTERVAL_SECS=60
-RATE_LIMIT_GENERAL_MAX=1000
+PORT=3000
+NODE_ENV=development
+STORAGE_ROOT=/tmp/loony-s3/data
+DB_PATH=/tmp/loony-s3/metadata.db
+JWT_SECRET=dev-secret-change-in-production
+PRESIGNED_SECRET=dev-presigned-secret
+BASE_URL=http://localhost:3000
 ```
+
+### Production (single server)
+
+```env
+PORT=3000
+NODE_ENV=production
+STORAGE_ROOT=/var/data/loony-s3/objects
+DB_PATH=/var/data/loony-s3/metadata.db
+
+JWT_SECRET=<output of: openssl rand -hex 32>
+JWT_EXPIRY=12h
+PRESIGNED_SECRET=<output of: openssl rand -hex 32>
+PRESIGNED_MAX_EXPIRY_SECONDS=86400
+
+BASE_URL=https://storage.yourdomain.com
+MAX_OBJECT_SIZE_BYTES=5368709120
+MIN_PART_SIZE_BYTES=5242880
+```
+
+### Future — PostgreSQL + Distributed Storage
+
+When the PostgreSQL and distributed storage backends are implemented (see [next-steps.md](next-steps.md)), add:
+
+```env
+DB_DRIVER=postgres
+PG_URL=postgresql://loony:secret@postgres:5432/loony_s3
+PG_POOL_MIN=2
+PG_POOL_MAX=20
+
+STORAGE_DRIVER=minio
+MINIO_ENDPOINT=http://minio:9000
+MINIO_BUCKET=loony-s3-objects
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=minioadmin
+```
+
+`server.ts` reads `DB_DRIVER` and `STORAGE_DRIVER` and instantiates the appropriate implementation. No service code changes.

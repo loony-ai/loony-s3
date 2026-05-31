@@ -160,9 +160,8 @@ created_at  TEXT
 $STORAGE_ROOT/
 │
 ├── {bucket-name}/
-│   ├── {2-char-shard}/        ← first level  (256 possibilities, e.g. "a3/")
-│   │   └── {2-char-shard}/    ← second level (65,536 dirs total, e.g. "a3/f7/")
-│   │       └── {uuid-hex}     ← actual object file (storageKey = bucket/ab/cd/uuid)
+│   ├── {2-char-shard}/        ← prevent huge flat directories (e.g. "a3/", "f7/")
+│   │   └── {uuid-hex}         ← actual object file (storageKey = bucket/shard/uuid)
 │   └── ...
 │
 └── __tmp/
@@ -172,7 +171,7 @@ $STORAGE_ROOT/
         └── ...                ← assembled into bucket/shard/uuid at complete
 ```
 
-**Why sharding?** Most filesystems slow down when a directory exceeds ~100K entries. Using the first 4 hex chars of the UUID as a two-level shard (65,536 leaf directories) keeps each directory to ~15K files at 1 billion objects.
+**Why sharding?** Most filesystems slow down when a directory exceeds ~100K entries. Using the first 2 hex chars of the UUID (256 buckets) keeps any single directory bounded.
 
 **Why atomic writes?** Every object is first written to `{dest}.tmp.{timestamp}`, then `rename()`d to the final path. This ensures a reader never sees a partially-written file.
 
